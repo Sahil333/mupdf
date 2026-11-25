@@ -2737,6 +2737,54 @@ pdf_filter_Do_image(fz_context *ctx, pdf_processor *proc, const char *name, fz_i
 	}
 }
 
+/* A form inherits the text state in force where it is drawn. The filter
+ * holds text state back until text is drawn, so a change made where no
+ * text follows, such as a reset in an empty text object, is still pending
+ * when a form is drawn: send it first, or the form's text is drawn with the
+ * text state sent before. */
+static void
+flush_text_state(fz_context *ctx, pdf_sanitize_processor *p)
+{
+	filter_gstate *gstate = p->gstate;
+
+	if (gstate->pending.text.char_space != gstate->sent.text.char_space)
+	{
+		gstate = ensure_pushed(ctx, p);
+		if (p->super.chain->op_Tc)
+			p->super.chain->op_Tc(ctx, p->super.chain, gstate->pending.text.char_space);
+		gstate->sent.text.char_space = gstate->pending.text.char_space;
+	}
+	if (gstate->pending.text.word_space != gstate->sent.text.word_space)
+	{
+		gstate = ensure_pushed(ctx, p);
+		if (p->super.chain->op_Tw)
+			p->super.chain->op_Tw(ctx, p->super.chain, gstate->pending.text.word_space);
+		gstate->sent.text.word_space = gstate->pending.text.word_space;
+	}
+	if (gstate->pending.text.scale != gstate->sent.text.scale)
+	{
+		/* The value of scale in the gstate is divided by 100 from what is written in the file */
+		gstate = ensure_pushed(ctx, p);
+		if (p->super.chain->op_Tz)
+			p->super.chain->op_Tz(ctx, p->super.chain, gstate->pending.text.scale*100);
+		gstate->sent.text.scale = gstate->pending.text.scale;
+	}
+	if (gstate->pending.text.render != gstate->sent.text.render)
+	{
+		gstate = ensure_pushed(ctx, p);
+		if (p->super.chain->op_Tr)
+			p->super.chain->op_Tr(ctx, p->super.chain, gstate->pending.text.render);
+		gstate->sent.text.render = gstate->pending.text.render;
+	}
+	if (gstate->pending.text.rise != gstate->sent.text.rise)
+	{
+		gstate = ensure_pushed(ctx, p);
+		if (p->super.chain->op_Ts)
+			p->super.chain->op_Ts(ctx, p->super.chain, gstate->pending.text.rise);
+		gstate->sent.text.rise = gstate->pending.text.rise;
+	}
+}
+
 static void
 pdf_filter_Do_form(fz_context *ctx, pdf_processor *proc, const char *name, pdf_obj *xobj)
 {
@@ -2755,6 +2803,7 @@ pdf_filter_Do_form(fz_context *ctx, pdf_processor *proc, const char *name, pdf_o
 		pdf_dict_del(ctx, xobj, PDF_NAME(OC));
 
 	filter_flush(ctx, p, FLUSH_ALL);
+	flush_text_state(ctx, p);
 
 	if (p->global_options->instance_forms)
 	{
