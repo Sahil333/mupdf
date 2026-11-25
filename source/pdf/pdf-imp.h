@@ -60,5 +60,27 @@ pdf_obj *pdf_parent_root(fz_context *ctx, pdf_obj *start, void (*repair)(fz_cont
 */
 pdf_obj *pdf_walk_parent(fz_context *ctx, pdf_obj *start, void (*repair)(fz_context *, pdf_document *doc), pdf_obj *(*step)(fz_context *, pdf_obj *, void *), void *step_arg);
 
+/*
+	Blanking image pixels that no placement shows (the save option
+	blank-unshown-pixels).
+
+	pdf_new_unshown_pixels draws every page, its annotations and its
+	widgets, as for viewing and as for printing, and records where each image is placed
+	and the clips in force there. Then every image XObject that has
+	pixels no placement shows (outside the page, or outside a clip) is
+	blanked in place, so all its uses still share it. An image whose
+	pixels are all shown is left as it was. Identical images are
+	treated as one.
+
+	Inline images are blanked by passing the result as the opaque
+	value of a sanitize filter, with
+	pdf_unshown_pixels_inline_image_filter as its image_filter.
+*/
+typedef struct pdf_unshown_pixels pdf_unshown_pixels;
+
+pdf_unshown_pixels *pdf_new_unshown_pixels(fz_context *ctx, pdf_document *doc);
+fz_image *pdf_unshown_pixels_inline_image_filter(fz_context *ctx, void *opaque, fz_matrix ctm, const char *name, fz_image *image, fz_rect clip);
+void pdf_drop_unshown_pixels(fz_context *ctx, pdf_unshown_pixels *unshown);
+
 
 #endif /* MUPDF_PDF_PDF_IMP_H */

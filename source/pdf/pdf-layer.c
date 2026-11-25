@@ -773,7 +773,7 @@ pdf_is_ocg_hidden_imp(fz_context *ctx, pdf_document *doc, pdf_resource_stack *rd
 	{
 		/* An Optional Content Membership Dictionary */
 		pdf_obj *name;
-		int combine, on = 0;
+		int combine, n = 0, any = 0, all = 1;
 
 		obj = pdf_dict_get(ctx, ocg, PDF_NAME(VE));
 		if (pdf_is_array(ctx, obj)) {
@@ -781,8 +781,8 @@ pdf_is_ocg_hidden_imp(fz_context *ctx, pdf_document *doc, pdf_resource_stack *rd
 			return 0;
 		}
 		name = pdf_dict_get(ctx, ocg, PDF_NAME(P));
-		/* Set combine; Bit 0 set => AND, Bit 1 set => true means
-		 * Off, otherwise true means On */
+		/* Set combine; Bit 0 set => all of them (else any), Bit 1 set
+		 * => the test is that a group is off (else that it is on). */
 		if (pdf_name_eq(ctx, name, PDF_NAME(AllOn)))
 		{
 			combine = 1;
@@ -801,29 +801,29 @@ pdf_is_ocg_hidden_imp(fz_context *ctx, pdf_document *doc, pdf_resource_stack *rd
 		}
 
 		obj = pdf_dict_get(ctx, ocg, PDF_NAME(OCGs));
-		on = combine & 1;
 		if (pdf_is_array(ctx, obj)) {
 			int i, len;
 			len = pdf_array_len(ctx, obj);
 			for (i = 0; i < len; i++)
 			{
 				int hidden = pdf_is_ocg_hidden_imp(ctx, doc, rdb, usage, pdf_array_get(ctx, obj, i), &cycle);
-				if ((combine & 1) == 0)
-					hidden = !hidden;
-				if (combine & 2)
-					on &= hidden;
-				else
-					on |= hidden;
+				int test = (combine & 2) ? hidden : !hidden;
+				any |= test;
+				all &= test;
+				n++;
 			}
 		}
-		else
+		else if (obj)
 		{
-			on = pdf_is_ocg_hidden_imp(ctx, doc, rdb, usage, obj, &cycle);
-			if ((combine & 1) == 0)
-				on = !on;
+			int hidden = pdf_is_ocg_hidden_imp(ctx, doc, rdb, usage, obj, &cycle);
+			any = all = (combine & 2) ? hidden : !hidden;
+			n = 1;
 		}
 
-		return !on;
+		/* With no groups, the dictionary has no effect. */
+		if (n == 0)
+			return 0;
+		return !((combine & 1) ? all : any);
 	}
 	/* No idea what sort of object this is - be visible */
 	return 0;

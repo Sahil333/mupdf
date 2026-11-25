@@ -375,6 +375,16 @@ typedef enum
 
 	culler: A function called to see whether each object should
 	be culled or not.
+
+	drop_hidden_oc: If set, content inside optional content that is
+	off (as for viewing, by pdf_is_ocg_hidden) is not sent, and the
+	optional content markers (BDC /OC, and /OC in shown XObjects and
+	shadings) are removed from content that is sent. Hidden clipping
+	paths still clip, as when drawing.
+
+	drop_mc_properties: If set, a BDC whose properties are not an
+	optional content group or membership dictionary is sent as a BMC
+	with the same tag, and a DP as an MP.
 */
 typedef struct
 {
@@ -383,6 +393,8 @@ typedef struct
 	int (*text_filter)(fz_context *ctx, void *opaque, int *ucsbuf, int ucslen, fz_matrix trm, fz_matrix ctm, fz_rect bbox, int tr, float ca, float CA);
 	void (*after_text_object)(fz_context *ctx, void *opaque, pdf_document *doc, pdf_processor *chain, fz_matrix ctm);
 	int (*culler)(fz_context *ctx, void *opaque, fz_rect bbox, fz_cull_type type);
+	int drop_hidden_oc;
+	int drop_mc_properties;
 }
 pdf_sanitize_filter_options;
 

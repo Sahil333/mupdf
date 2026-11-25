@@ -1857,7 +1857,7 @@ static void complete_signatures(fz_context *ctx, pdf_document *doc, pdf_write_st
 	}
 }
 
-static void clean_content_streams(fz_context *ctx, pdf_document *doc, int sanitize, int ascii, int newlines)
+static void clean_content_streams(fz_context *ctx, pdf_document *doc, const pdf_write_options *in_opts)
 {
 	int n = pdf_count_pages(ctx, doc);
 	int i;
@@ -1865,32 +1865,57 @@ static void clean_content_streams(fz_context *ctx, pdf_document *doc, int saniti
 	pdf_filter_options options = { 0 };
 	pdf_sanitize_filter_options sopts = { 0 };
 	pdf_filter_factory list[2] = { 0 };
+	pdf_unshown_pixels *unshown = NULL;
+	int sanitize = in_opts->do_sanitize ||
+		in_opts->do_drop_hidden_oc ||
+		in_opts->do_drop_mc_properties ||
+		in_opts->do_blank_unshown_pixels;
 
 	options.recurse = 1;
-	options.ascii = ascii;
-	options.newlines = newlines;
+	options.ascii = in_opts->do_ascii;
+	options.newlines = in_opts->do_pretty;
 	options.filters = sanitize ? list : NULL;
 	list[0].filter = pdf_new_sanitize_filter;
 	list[0].options = &sopts;
+	sopts.drop_hidden_oc = in_opts->do_drop_hidden_oc;
+	sopts.drop_mc_properties = in_opts->do_drop_mc_properties;
 
-	for (i = 0; i < n; i++)
+	fz_var(unshown);
+
+	fz_try(ctx)
 	{
-		pdf_annot *annot;
-		pdf_page *page = pdf_load_page(ctx, doc, i);
-
-		fz_try(ctx)
+		/* Image XObjects are blanked in place, before the content is
+		 * filtered. Inline images are blanked as the filter meets them. */
+		if (in_opts->do_blank_unshown_pixels)
 		{
-			pdf_filter_page_contents(ctx, doc, page, &options);
-			for (annot = pdf_first_annot(ctx, page); annot != NULL; annot = pdf_next_annot(ctx, annot))
-			{
-				pdf_filter_annot_contents(ctx, doc, annot, &options);
-			}
+			unshown = pdf_new_unshown_pixels(ctx, doc);
+			sopts.opaque = unshown;
+			sopts.image_filter = pdf_unshown_pixels_inline_image_filter;
 		}
-		fz_always(ctx)
-			fz_drop_page(ctx, &page->super);
-		fz_catch(ctx)
-			fz_rethrow(ctx);
+
+		for (i = 0; i < n; i++)
+		{
+			pdf_annot *annot;
+			pdf_page *page = pdf_load_page(ctx, doc, i);
+
+			fz_try(ctx)
+			{
+				pdf_filter_page_contents(ctx, doc, page, &options);
+				for (annot = pdf_first_annot(ctx, page); annot != NULL; annot = pdf_next_annot(ctx, annot))
+				{
+					pdf_filter_annot_contents(ctx, doc, annot, &options);
+				}
+			}
+			fz_always(ctx)
+				fz_drop_page(ctx, &page->super);
+			fz_catch(ctx)
+				fz_rethrow(ctx);
+		}
 	}
+	fz_always(ctx)
+		pdf_drop_unshown_pixels(ctx, unshown);
+	fz_catch(ctx)
+		fz_rethrow(ctx);
 }
 
 /* Initialise the pdf_write_state, used dynamically during the write, from the static
@@ -2003,6 +2028,9 @@ const char *fz_pdf_write_options_usage =
 	"\tlinearize: optimize for web browsers (no longer supported!)\n"
 	"\tclean: pretty-print graphics commands in content streams\n"
 	"\tsanitize: sanitize graphics commands in content streams\n"
+	"\tdrop-hidden-oc: sanitize, dropping content on optional content that is off, and the optional content markers\n"
+	"\tdrop-mc-properties: sanitize, dropping marked-content properties (such as ActualText) other than optional content\n"
+	"\tblank-unshown-pixels: sanitize, blanking image pixels that no placement shows (outside the page or every clip)\n"
 	"\tgarbage: garbage collect unused objects\n"
 	"\tor garbage=compact: ... and compact cross reference table\n"
 	"\tor garbage=deduplicate: ... and remove duplicate objects\n"
@@ -2077,6 +2105,9 @@ pdf_apply_write_options(fz_context *ctx, pdf_write_options *opts, fz_options *ar
 	fz_lookup_option_boolean(ctx, args, "linearize", &opts->do_linear);
 	fz_lookup_option_boolean(ctx, args, "clean", &opts->do_clean);
 	fz_lookup_option_boolean(ctx, args, "sanitize", &opts->do_sanitize);
+	fz_lookup_option_boolean(ctx, args, "drop-hidden-oc", &opts->do_drop_hidden_oc);
+	fz_lookup_option_boolean(ctx, args, "drop-mc-properties", &opts->do_drop_mc_properties);
+	fz_lookup_option_boolean(ctx, args, "blank-unshown-pixels", &opts->do_blank_unshown_pixels);
 	fz_lookup_option_boolean(ctx, args, "incremental", &opts->do_incremental);
 	fz_lookup_option_boolean(ctx, args, "objstms", &opts->do_use_objstms);
 	fz_lookup_option_boolean(ctx, args, "reproducible", &opts->reproducible);
@@ -2161,12 +2192,13 @@ prepare_for_save(fz_context *ctx, pdf_document *doc, const pdf_write_options *in
 		pdf_update_open_pages(ctx, doc);
 
 	/* Rewrite (and possibly sanitize) the operator streams */
-	if (in_opts->do_clean || in_opts->do_sanitize)
+	if (in_opts->do_clean || in_opts->do_sanitize ||
+		in_opts->do_drop_hidden_oc || in_opts->do_drop_mc_properties || in_opts->do_blank_unshown_pixels)
 	{
 		pdf_begin_operation(ctx, doc, "Clean content streams");
 		fz_try(ctx)
 		{
-			clean_content_streams(ctx, doc, in_opts->do_sanitize, in_opts->do_ascii, in_opts->do_pretty);
+			clean_content_streams(ctx, doc, in_opts);
 			pdf_end_operation(ctx, doc);
 		}
 		fz_catch(ctx)
@@ -2934,6 +2966,9 @@ void pdf_write_document(fz_context *ctx, pdf_document *doc, fz_output *out, cons
 			in_opts->do_linear ||
 			in_opts->do_clean ||
 			in_opts->do_sanitize ||
+			in_opts->do_drop_hidden_oc ||
+			in_opts->do_drop_mc_properties ||
+			in_opts->do_blank_unshown_pixels ||
 			in_opts->do_appearance ||
 			in_opts->do_encrypt != PDF_ENCRYPT_KEEP)
 			fz_throw(ctx, FZ_ERROR_ARGUMENT, "Can't use these options when snapshotting!");
@@ -2981,6 +3016,9 @@ void pdf_save_document(fz_context *ctx, pdf_document *doc, const char *filename,
 			in_opts->do_garbage ||
 			in_opts->do_clean ||
 			in_opts->do_sanitize ||
+			in_opts->do_drop_hidden_oc ||
+			in_opts->do_drop_mc_properties ||
+			in_opts->do_blank_unshown_pixels ||
 			in_opts->do_appearance ||
 			in_opts->do_encrypt != PDF_ENCRYPT_KEEP)
 			fz_throw(ctx, FZ_ERROR_ARGUMENT, "Can't use these options when snapshotting!");
@@ -3078,6 +3116,12 @@ pdf_format_write_options(fz_context *ctx, char *buffer, size_t buffer_len, const
 		ADD_OPT("clean=yes");
 	if (opts->do_sanitize)
 		ADD_OPT("sanitize=yes");
+	if (opts->do_drop_hidden_oc)
+		ADD_OPT("drop-hidden-oc=yes");
+	if (opts->do_drop_mc_properties)
+		ADD_OPT("drop-mc-properties=yes");
+	if (opts->do_blank_unshown_pixels)
+		ADD_OPT("blank-unshown-pixels=yes");
 	if (opts->do_incremental)
 		ADD_OPT("incremental=yes");
 	if (opts->do_encrypt == PDF_ENCRYPT_NONE)

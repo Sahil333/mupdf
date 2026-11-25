@@ -107,6 +107,8 @@ typedef struct
 typedef struct tag_record
 {
 	int bdc;
+	/* A layer marker that drop_hidden_oc removes: never sent, nor its EMC. */
+	int suppress;
 	char *tag;
 	pdf_obj *raw;
 	pdf_obj *cooked;
@@ -143,6 +145,15 @@ typedef struct
 	pdf_filter_options *global_options;
 	fz_path *path;
 } pdf_sanitize_processor;
+
+/* Are we inside optional content that is off, and asked to drop it? The
+ * interpreter counts the depth in super.hidden, using the same visibility
+ * test as when drawing, because we set super.usage. */
+static int
+drop_hidden(pdf_sanitize_processor *p)
+{
+	return p->options->drop_hidden_oc && p->super.hidden > 0;
+}
 
 static void
 copy_resource(fz_context *ctx, pdf_sanitize_processor *p, pdf_obj *key, const char *name)
@@ -258,7 +269,11 @@ static void flush_tags(fz_context *ctx, pdf_sanitize_processor *p, tag_record **
 		return;
 	if (tag->prev)
 		flush_tags(ctx, p, &tag->prev);
-	if (tag->bdc)
+	if (tag->suppress)
+	{
+		/* Nothing to send. */
+	}
+	else if (tag->bdc)
 	{
 		if (p->super.chain->op_BDC)
 			p->super.chain->op_BDC(ctx, p->super.chain, tag->tag, tag->raw, tag->cooked);
@@ -740,7 +755,9 @@ filter_show_char(fz_context *ctx, pdf_sanitize_processor *p, int cid, int *unico
 	}
 	*unicode = ucsbuf[0];
 
-	if (p->options->text_filter || p->options->culler)
+	if (drop_hidden(p))
+		remove = 1;
+	else if (p->options->text_filter || p->options->culler)
 	{
 		fz_matrix ctm;
 		fz_rect bbox;
@@ -1763,11 +1780,28 @@ cull_path(fz_context *ctx, pdf_sanitize_processor *p, int type, int flush)
 }
 
 static void
+pdf_filter_n(fz_context *ctx, pdf_processor *proc);
+
+/* Paint nothing for a path in optional content that is off: send it on as
+ * 'n', which keeps it only if it clips (see pdf_filter_n). */
+static int
+drop_hidden_paint(fz_context *ctx, pdf_sanitize_processor *p)
+{
+	if (!drop_hidden(p))
+		return 0;
+	pdf_filter_n(ctx, &p->super);
+	return 1;
+}
+
+static void
 pdf_filter_S(fz_context *ctx, pdf_processor *proc)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
+		return;
+
+	if (drop_hidden_paint(ctx, p))
 		return;
 
 	if (cull_path(ctx, p, FZ_CULL_PATH_STROKE, FLUSH_STROKE))
@@ -1785,6 +1819,9 @@ pdf_filter_s(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden_paint(ctx, p))
+		return;
+
 	if (cull_path(ctx, p, FZ_CULL_PATH_STROKE, FLUSH_STROKE))
 		return;
 
@@ -1798,6 +1835,9 @@ pdf_filter_F(fz_context *ctx, pdf_processor *proc)
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
+		return;
+
+	if (drop_hidden_paint(ctx, p))
 		return;
 
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL, FLUSH_FILL))
@@ -1815,6 +1855,9 @@ pdf_filter_f(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden_paint(ctx, p))
+		return;
+
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL, FLUSH_FILL))
 		return;
 
@@ -1828,6 +1871,9 @@ pdf_filter_fstar(fz_context *ctx, pdf_processor *proc)
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
+		return;
+
+	if (drop_hidden_paint(ctx, p))
 		return;
 
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL, FLUSH_FILL))
@@ -1845,6 +1891,9 @@ pdf_filter_B(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden_paint(ctx, p))
+		return;
+
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
 		return;
 
@@ -1858,6 +1907,9 @@ pdf_filter_Bstar(fz_context *ctx, pdf_processor *proc)
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
+		return;
+
+	if (drop_hidden_paint(ctx, p))
 		return;
 
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
@@ -1875,6 +1927,9 @@ pdf_filter_b(fz_context *ctx, pdf_processor *proc)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden_paint(ctx, p))
+		return;
+
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
 		return;
 
@@ -1888,6 +1943,9 @@ pdf_filter_bstar(fz_context *ctx, pdf_processor *proc)
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
+		return;
+
+	if (drop_hidden_paint(ctx, p))
 		return;
 
 	if (cull_path(ctx, p, FZ_CULL_PATH_FILL_STROKE, FLUSH_ALL | FLUSH_STROKE_STATE))
@@ -1904,6 +1962,16 @@ pdf_filter_n(fz_context *ctx, pdf_processor *proc)
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
+
+	/* Hidden content still clips, as MuPDF draws it, so a clipping path in
+	 * optional content that is off is kept. Any other path is dropped. */
+	if (drop_hidden(p) && p->gstate->clip_op == NO_CLIP_OP)
+	{
+		fz_drop_path(ctx, p->path);
+		p->path = NULL;
+		p->path = fz_new_path(ctx);
+		return;
+	}
 
 	if (cull_path(ctx, p, FZ_CULL_PATH_DROP, (p->gstate->clip_op == NO_CLIP_OP ? FLUSH_OP : FLUSH_CLIP)))
 		return;
@@ -2501,6 +2569,9 @@ pdf_filter_BI(fz_context *ctx, pdf_processor *proc, fz_image *image, const char 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden(p))
+		return;
+
 	if (p->options->culler)
 	{
 		fz_matrix ctm = fz_concat(p->gstate->pending.ctm, p->gstate->sent.ctm);
@@ -2548,6 +2619,21 @@ pdf_filter_sh(fz_context *ctx, pdf_processor *proc, const char *name, fz_shade *
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden(p))
+		return;
+
+	if (p->options->drop_hidden_oc)
+	{
+		pdf_obj *obj = pdf_lookup_resource(ctx, proc->rstack, PDF_NAME(Shading), name);
+		pdf_obj *oc = pdf_dict_get(ctx, obj, PDF_NAME(OC));
+		if (oc)
+		{
+			if (pdf_is_ocg_hidden(ctx, p->doc, proc->rstack, proc->usage, oc))
+				return;
+			pdf_dict_del(ctx, obj, PDF_NAME(OC));
+		}
+	}
+
 	if (p->options->culler)
 	{
 		fz_matrix ctm = fz_concat(p->gstate->pending.ctm, p->gstate->sent.ctm);
@@ -2574,6 +2660,18 @@ pdf_filter_Do_image(fz_context *ctx, pdf_processor *proc, const char *name, fz_i
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
+
+	if (drop_hidden(p))
+		return;
+
+	/* The interpreter skips an image whose own /OC is off. Drop the marker
+	 * from one that is shown. */
+	if (p->options->drop_hidden_oc)
+	{
+		pdf_obj *obj = pdf_lookup_resource(ctx, proc->rstack, PDF_NAME(XObject), name);
+		if (pdf_dict_get(ctx, obj, PDF_NAME(OC)))
+			pdf_dict_del(ctx, obj, PDF_NAME(OC));
+	}
 
 	if (p->options->culler)
 	{
@@ -2648,6 +2746,14 @@ pdf_filter_Do_form(fz_context *ctx, pdf_processor *proc, const char *name, pdf_o
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden(p))
+		return;
+
+	/* The interpreter skips a form whose own /OC is off. Drop the marker
+	 * from one that is shown. */
+	if (p->options->drop_hidden_oc && pdf_dict_get(ctx, xobj, PDF_NAME(OC)))
+		pdf_dict_del(ctx, xobj, PDF_NAME(OC));
+
 	filter_flush(ctx, p, FLUSH_ALL);
 
 	if (p->global_options->instance_forms)
@@ -2687,6 +2793,9 @@ pdf_filter_MP(fz_context *ctx, pdf_processor *proc, const char *tag)
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
 
+	if (drop_hidden(p))
+		return;
+
 	filter_flush(ctx, p, FLUSH_OP);
 	if (p->super.chain->op_MP)
 		p->super.chain->op_MP(ctx, p->super.chain, tag);
@@ -2699,6 +2808,15 @@ pdf_filter_DP(fz_context *ctx, pdf_processor *proc, const char *tag, pdf_obj *ra
 
 	if (fz_is_empty_rect(p->gstate->clip_rect))
 		return;
+
+	if (drop_hidden(p))
+		return;
+
+	if (p->options->drop_mc_properties)
+	{
+		pdf_filter_MP(ctx, proc, tag);
+		return;
+	}
 
 	filter_flush(ctx, p, FLUSH_OP);
 	if (p->super.chain->op_DP)
@@ -2721,6 +2839,7 @@ pdf_filter_BMC(fz_context *ctx, pdf_processor *proc, const char *tag)
 		fz_free(ctx, bmc);
 		fz_rethrow(ctx);
 	}
+	bmc->suppress = drop_hidden(p);
 	bmc->prev = p->pending_tags;
 	p->pending_tags = bmc;
 }
@@ -2732,10 +2851,32 @@ pdf_filter_BDC(fz_context *ctx, pdf_processor *proc, const char *tag, pdf_obj *r
 	 * flushed to the stream, it'll be moved from there onto
 	 * current_tags. */
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
-	tag_record *bdc = fz_malloc_struct(ctx, tag_record);
+	tag_record *bdc;
 	pdf_obj *mcid;
 	pdf_obj *str;
 
+	/* Optional content markers. The interpreter has already decided
+	 * whether what follows is hidden; either way the marker goes. So does
+	 * all marked content inside hidden content. */
+	if (p->options->drop_hidden_oc && (!strcmp(tag, "OC") || drop_hidden(p)))
+	{
+		pdf_filter_BMC(ctx, proc, tag);
+		p->pending_tags->suppress = 1;
+		return;
+	}
+
+	/* Keep the tag, but not its properties, unless they name a layer. */
+	if (p->options->drop_mc_properties)
+	{
+		pdf_obj *type = pdf_dict_get(ctx, cooked, PDF_NAME(Type));
+		if (strcmp(tag, "OC") || (!pdf_name_eq(ctx, type, PDF_NAME(OCG)) && !pdf_name_eq(ctx, type, PDF_NAME(OCMD))))
+		{
+			pdf_filter_BMC(ctx, proc, tag);
+			return;
+		}
+	}
+
+	bdc = fz_malloc_struct(ctx, tag_record);
 	fz_try(ctx)
 	{
 		bdc->bdc = 1;
@@ -2798,6 +2939,8 @@ pdf_filter_EMC(fz_context *ctx, pdf_processor *proc)
 	 * pop one of the current ones, and pass the EMC on. */
 	if (p->pending_tags != NULL)
 		pop_tag(ctx, p, &p->pending_tags);
+	else if (p->current_tags && p->current_tags->suppress)
+		pop_tag(ctx, p, &p->current_tags);
 	else if (p->current_tags)
 	{
 		update_mcid(ctx, p);
@@ -2919,6 +3062,8 @@ pdf_reset_sanitize_processor(fz_context *ctx, pdf_processor *proc)
 {
 	pdf_sanitize_processor *p = (pdf_sanitize_processor*)proc;
 
+	/* Each Type 3 glyph procedure starts outside any optional content. */
+	p->super.hidden = 0;
 	pdf_reset_processor(ctx, p->super.chain);
 }
 
@@ -3067,6 +3212,9 @@ pdf_new_sanitize_filter(
 	proc->super.chain = chain;
 	proc->global_options = options;
 	proc->options = sopts;
+	/* Have the interpreter track optional content that is off. */
+	if (sopts->drop_hidden_oc)
+		proc->super.usage = "View";
 	proc->transform = transform;
 	proc->path = NULL;
 

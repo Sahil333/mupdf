@@ -789,6 +789,9 @@ typedef struct
 	int compression_effort; /* 0 for default. 100 = max, 1 = min. */
 	int do_labels; /* Add labels to each object showing how it can be reached from the Root. */
 	int reproducible; /* Attempt to make operations 'reproducible'. For example, avoid writing MuPDF version number. */
+	int do_drop_hidden_oc; /* Sanitize, dropping content on optional content that is off, and the optional content markers. */
+	int do_drop_mc_properties; /* Sanitize, dropping marked-content properties other than optional content. */
+	int do_blank_unshown_pixels; /* Sanitize, blanking image pixels that no placement shows. */
 } pdf_write_options;
 
 FZ_DATA extern const pdf_write_options pdf_default_write_options;
