@@ -558,7 +558,15 @@ static void renumberobjs(fz_context *ctx, pdf_document *doc, pdf_write_state *op
 			{
 				nval = renumberobj(ctx, doc, opts, obj);
 				if (nval != obj)
+				{
+					/* nval is a copy, made because something else also
+					 * holds obj. pdf_update_object stores it in the
+					 * incremental xref section, so move the object's
+					 * entry there first: a new, empty entry would lose
+					 * the stream that obj is the dictionary of. */
+					pdf_xref_ensure_incremental_object(ctx, doc, num);
 					pdf_update_object(ctx, doc, num, nval);
+				}
 				nval = NULL;
 			}
 		}
